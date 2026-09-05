@@ -1,0 +1,14 @@
+{
+  "firmware": {
+    "version": "2.4.2-amix-kuningan",
+    "url": ""
+  },
+  "websocket": {
+    "url": "wss://amixkuningancloud-production.up.railway.app/xiaozhi/v1/",
+    "token": ""
+  },
+  "server_time": {
+    "timestamp": 0,
+    "timezone_offset": 420
+  }
+}
