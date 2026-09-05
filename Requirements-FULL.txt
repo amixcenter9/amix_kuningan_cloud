@@ -1,7 +1,0 @@
-fastapi
-uvicorn
-edge-tts
-openai
-google-generativeai
-python-multipart
-websockets
