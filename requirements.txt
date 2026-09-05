@@ -1,6 +1,0 @@
-fastapi
-uvicorn
-websockets
-edge-tts
-openai
-python-multipart
