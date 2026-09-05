@@ -1,9 +1,3 @@
-"""
-AMIX Kuningan Cloud - Full Xiaozhi Server v2.4.2 FIX
-Fix: OTA GET/POST + WebSocket + Sunda Kuningan
-Deploy di Railway: https://amixkuningancloud-production.up.railway.app
-"""
-
 from fastapi import FastAPI, WebSocket, Request, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 import json
@@ -15,7 +9,7 @@ SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT",
     "Kamu adalah Siaga, robot asisten dari Kuningan Jawa Barat. "
     "Ngomong pakai bahasa Sunda Kuningan campur Indonesia, santai, akrab, "
     "panggil user 'bos'. Jawab singkat 1-2 kalimat aja."
-)
+
 
 WS_URL = "wss://amixkuningancloud-production.up.railway.app/xiaozhi/v1/"
 VERSION = "2.4.2-amix-kuningan"
