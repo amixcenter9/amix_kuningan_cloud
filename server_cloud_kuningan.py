@@ -1,10 +1,10 @@
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import JSONResponse
 import json
+import uuid
 
-app = FastAPI()
+app = FastAPI(title="SIAGA KUNINGAN - FIX SESSION_ID")
 
-# --- OTA WAJIB ---
 @app.get("/xiaozhi/ota/")
 @app.post("/xiaozhi/ota/")
 @app.get("/xiaozhi/ota")
@@ -18,55 +18,91 @@ async def ota(request: Request):
 
 @app.get("/")
 def root():
-    return {"status": "Siaga Online", "ws": "/xiaozhi/v1/"}
+    return {"status": "Siaga Online - FIX SESSION_ID", "fix": "session_id added"}
 
-# --- WEBSOCKET YANG BENER (FIX TIDAK DAPAT TERHUBUNG) ---
 @app.websocket("/xiaozhi/v1/")
 @app.websocket("/xiaozhi/v1")
 async def ws_handler(websocket: WebSocket):
     await websocket.accept()
-    print(">>> SIAGA KONEK!")
+    session_id = str(uuid.uuid4())
+    print(f">>> SIAGA KONEK! session_id={session_id}")
 
-    # KIRIM HELLO BALIK (WAJIB ADA audio_params)
+    # HELLO WAJIB ADA session_id + transport + audio_params sample_rate 24000
     hello = {
         "type": "hello",
         "transport": "websocket",
+        "session_id": session_id,
         "audio_params": {
             "format": "opus",
-            "sample_rate": 16000,
+            "sample_rate": 24000,
             "channels": 1,
             "frame_duration": 60
         }
     }
     await websocket.send_text(json.dumps(hello))
+    print(f"<<< Kirim hello dengan session_id")
 
     while True:
         try:
             data = await websocket.receive()
-            # Kalau robot kirim audio (bytes)
             if "bytes" in data:
                 continue
-            
-            # Kalau robot kirim JSON text
             if "text" in data:
                 try:
                     msg = json.loads(data["text"])
-                    print(f"Dari Siaga: {msg}")
+                    print(f"Dari Siaga [{session_id}]: {msg}")
 
-                    # Robot bilang hello
                     if msg.get("type") == "hello":
+                        # Balas hello lagi dengan session_id yang sama
                         await websocket.send_text(json.dumps(hello))
-                    
-                    # Robot selesai ngomong -> kita jawab
-                    if msg.get("type") == "listen" and msg.get("state") == "stop":
-                        reply = "Kumaha bos! Abdi Siaga ti Kuningan! Server udah konek bos! Akhirnya bisa ngobrol!"
-                        print(f"Jawab: {reply}")
-                        await websocket.send_text(json.dumps({"type": "tts", "state": "start"}))
-                        await websocket.send_text(json.dumps({"type": "tts", "state": "sentence_start", "text": reply}))
-                        await websocket.send_text(json.dumps({"type": "tts", "state": "sentence_end", "text": reply}))
-                        await websocket.send_text(json.dumps({"type": "tts", "state": "stop"}))
-                except:
+
+                    # Semua mode: detect, start, stop
+                    if msg.get("type") == "listen":
+                        state = msg.get("state")
+                        print(f"Listen state: {state}")
+                        # Kalau client bilang detect atau stop, kita jawab
+                        if state in ["detect", "stop", "start"]:
+                            # Kalau detect, kadang ada text wake word
+                            reply = "Kumaha bos! Abdi Siaga ti Kuningan! Akhirna konek! Kumaha kabarna bos?"
+                            
+                            # Kirim TTS sesuai protokol resmi (pakai session_id)
+                            await websocket.send_text(json.dumps({
+                                "type": "tts",
+                                "state": "start",
+                                "session_id": session_id
+                            }))
+                            await websocket.send_text(json.dumps({
+                                "type": "tts",
+                                "state": "sentence_start",
+                                "text": reply,
+                                "session_id": session_id
+                            }))
+                            # Kalau mau pakai audio opus asli, kirim binary di sini
+                            # Untuk sekarang text only biar OLED muncul teks
+                            await websocket.send_text(json.dumps({
+                                "type": "tts",
+                                "state": "sentence_end",
+                                "session_id": session_id
+                            }))
+                            await websocket.send_text(json.dumps({
+                                "type": "tts",
+                                "state": "stop",
+                                "session_id": session_id
+                            }))
+                            print(f"Jawab terkirim!")
+
+                    if msg.get("type") == "text":
+                        user_text = msg.get("text", "")
+                        print(f"User text: {user_text}")
+                        reply = f"Siap bos! Bos bilang {user_text} ya? Abdi ngadangu!"
+                        await websocket.send_text(json.dumps({"type": "tts", "state": "start", "session_id": session_id}))
+                        await websocket.send_text(json.dumps({"type": "tts", "state": "sentence_start", "text": reply, "session_id": session_id}))
+                        await websocket.send_text(json.dumps({"type": "tts", "state": "sentence_end", "session_id": session_id}))
+                        await websocket.send_text(json.dumps({"type": "tts", "state": "stop", "session_id": session_id}))
+
+                except Exception as e:
+                    print(f"Error parsing: {e}")
                     pass
         except Exception as e:
-            print(f"Disconnect: {e}")
+            print(f"Disconnect {session_id}: {e}")
             break
