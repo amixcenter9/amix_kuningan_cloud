@@ -1,17 +1,34 @@
-from fastapi import FastAPI, WebSocket
-import json
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
 @app.get("/xiaozhi/ota/")
-async def ota():
+@app.post("/xiaozhi/ota/")
+@app.get("/xiaozhi/ota")
+@app.post("/xiaozhi/ota")
+async def ota(request: Request):
+    # Terima POST body pun tetep balikin JSON yang sama
+    body = {}
+    try:
+        body = await request.json()
+    except:
+        pass
+    print(f"OTA check dari robot: {body}")
+    
     return {
-        "firmware": {"version": "2.4.2-amix-kuningan", "url": ""},
+        "firmware": {
+            "version": "2.4.2-amix-kuningan",
+            "url": ""
+        },
         "websocket": {
             "url": "wss://amixkuningancloud-production.up.railway.app/xiaozhi/v1/",
             "token": ""
         },
-        "server_time": {"timestamp": 0, "timezone_offset": 420}
+        "server_time": {
+            "timestamp": 0,
+            "timezone_offset": 420
+        }
     }
 
 @app.websocket("/xiaozhi/v1/")
