@@ -3,5 +3,4 @@ uvicorn[standard]
 websockets
 edge-tts
 google-generativeai
-openai-whisper
 ffmpeg-python
