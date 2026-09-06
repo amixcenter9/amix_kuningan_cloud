@@ -1,6 +1,6 @@
 fastapi
-uvicorn[standard]
+uvicorn
 websockets
 edge-tts
 google-generativeai
-ffmpeg-python
+python-multipart
