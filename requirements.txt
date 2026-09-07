@@ -4,3 +4,4 @@ websockets
 edge-tts
 google-generativeai
 python-multipart
+yt-dlp
