@@ -35,7 +35,7 @@ async def ws_handler(websocket: WebSocket):
     await websocket.accept()
     logger.info("WS CONNECTED - HELLO SENT")
     
-    # Kirim Hello awal
+    # Kirim Hello awal ke ESP32
     await websocket.send_text(json.dumps({
         "type": "hello",
         "transport": "websocket",
@@ -48,18 +48,23 @@ async def ws_handler(websocket: WebSocket):
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
+                logger.warning(f"Gagal parse JSON: {raw}")
                 continue
 
             msg_type = msg.get("type")
             state = msg.get("state", "")
             text = msg.get("text", "")
 
-            # Log singkat aktivitas selain stream audio mentah
-            if msg_type != "listen" or state != "start":
-                logger.info(f"RECV type={msg_type} state={state} txt={text[:30]}")
+            # Log data masuk selain audio/hello mentah
+            logger.info(f"RECV type={msg_type} state={state} txt={text[:30]}")
 
-            # Tangani pesan dari client (ESP32)
-            if msg_type == "listen":
+            # 1. Jika tipe pesan adalah 'hello' dari ESP32, abaikan saja atau balas log
+            if msg_type == "hello":
+                logger.info("ESP32 HELLO RECEIVED - Perangkat siap.")
+                continue
+
+            # 2. Jika tipe pesan adalah 'listen'
+            elif msg_type == "listen":
                 if state == "start":
                     logger.info("LISTEN START - perangkat mulai mendengar...")
                     continue  
@@ -81,26 +86,18 @@ async def ws_handler(websocket: WebSocket):
                         except Exception as e:
                             logger.error(f"GEMINI ERR {e}")
 
-                    # --- KRUSIAL: KONTROL STATE AGAR TIDAK LOOPING ---
-                    # 1. Beritahu perangkat bahwa server mulai mengirim audio/TTS
+                    # Kirim respon TTS ke ESP32 secara berurutan
                     await websocket.send_text(json.dumps({"type": "tts", "state": "start"}))
-                    
-                    # 2. Kirim teks kalimat (bisa dipecah atau langsung)
                     await websocket.send_text(json.dumps({"type": "tts", "state": "sentence_start", "text": ai_text}))
                     await websocket.send_text(json.dumps({"type": "tts", "state": "sentence_end", "text": ai_text}))
-                    
-                    # 3. Tutup sesi TTS agar perangkat tahu AI selesai bicara
                     await websocket.send_text(json.dumps({"type": "tts", "state": "stop"}))
                     logger.info(f"TTS SENT: {ai_text}")
 
-                    # 4. Beritahu perangkat untuk kembali mendengarkan (opsional tapi disarankan tergantung firmware)
-                    # atau biarkan perangkat state ke idle/listen secara otomatis setelah tts stop.
-
-            # Tangani jika client mengirim abort/cancel
+            # 3. Jika client mengirim abort
             elif msg_type == "abort":
                 logger.info("CLIENT ABORTED SESI")
                 
     except Exception as e:
-        logger.error(f"WS ERR {e}")
+        logger.error(f"WS ERR: {str(e)}")
     finally:
         logger.info("WS DISCONNECTED")
