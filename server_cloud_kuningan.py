@@ -1,181 +1,166 @@
-import os, asyncio, json, base64, logging, time, re, subprocess, tempfile, shutil
-from aiohttp import web
+import os, json, logging, tempfile, shutil, subprocess, asyncio
+from fastapi import FastAPI, WebSocket
+from fastapi.responses import JSONResponse
 import google.generativeai as genai
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("amix-v9")
+logger = logging.getLogger("amix-v9-fastapi")
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip().replace("\n","").replace(" ","")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip().replace("\n","").replace(" ","").replace("\r","")
 logger.info(f"KEY LEN: {len(GEMINI_API_KEY)}")
-logger.info(f"KEY PREFIX: {GEMINI_API_KEY[:10]}...")
 
-# FIX V9 - PAKAI MODEL YANG MASIH HIDUP!
-# gemini-1.5-flash udah mati di v1beta, ganti ke gemini-2.0-flash atau gemini-1.5-flash-latest dengan API v1
-MODEL_NAME = "gemini-2.0-flash"  # PALING STABIL 2026
-# alternatif: "gemini-1.5-flash-latest" atau "gemini-2.5-flash"
+MODEL_NAME = "gemini-2.0-flash"  # FIX 2026 - gemini-1.5-flash mati di v1beta
 
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        # Test model list
         model = genai.GenerativeModel(MODEL_NAME)
         logger.info(f"GEMINI READY MODEL: {MODEL_NAME}")
     except Exception as e:
         logger.error(f"GEMINI CONFIG ERR: {e}")
+else:
+    logger.error("GEMINI KEY MISSING!")
 
-# Check ffmpeg & yt-dlp
-FFMPEG_OK = shutil.which("ffmpeg") is not None
-YTDLP_OK = False
 try:
     import yt_dlp
     YTDLP_OK = True
     logger.info("yt-dlp READY - YOUTUBE DJ READY!")
 except:
-    logger.warning("yt-dlp not installed")
+    YTDLP_OK = False
 
-if not FFMPEG_OK:
-    logger.warning("ffmpeg NOT FOUND - audio akan 0 chunks!")
-else:
-    logger.info("ffmpeg READY!")
+FFMPEG_OK = shutil.which("ffmpeg") is not None
+logger.info(f"ffmpeg: {FFMPEG_OK}")
 
-# ============== YOUTUBE DJ ==============
-def search_youtube(query):
+app = FastAPI()
+
+@app.get("/")
+async def root():
+    return {"status": "Amix Kuningan Cloud V9 FASTAPI READY", "model": MODEL_NAME, "key_len": len(GEMINI_API_KEY), "ffmpeg": FFMPEG_OK, "ytdlp": YTDLP_OK}
+
+@app.get("/xiaozhi/ota/")
+@app.post("/xiaozhi/ota/")
+async def ota():
+    return {
+        "firmware": {"version": "2.4.2-amix-v9-fastapi", "url": ""},
+        "websocket": {"url": f"wss://{os.getenv('RAILWAY_PUBLIC_DOMAIN','amixkuningancloud-production.up.railway.app')}/xiaozhi/v1/".replace("https://","wss://").replace("http://","ws://") if os.getenv('RAILWAY_PUBLIC_DOMAIN') else "wss://amixkuningancloud-production.up.railway.app/xiaozhi/v1/"}
+    }
+
+def search_youtube(query: str):
+    if not YTDLP_OK:
+        return None
     try:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'quiet': True,
-            'noplaylist': True,
-            'default_search': 'ytsearch1',
-            'extract_flat': True,
-        }
+        ydl_opts = {'format': 'bestaudio/best', 'quiet': True, 'noplaylist': True, 'default_search': 'ytsearch1', 'extract_flat': False}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{query} lagu", download=False)
-            if 'entries' in info and len(info['entries'])>0:
+            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+            if 'entries' in info and info['entries']:
                 return info['entries'][0]
+            return info
     except Exception as e:
         logger.error(f"YT SEARCH ERR: {e}")
-    return None
+        return None
 
-def download_and_convert(url):
-    try:
-        tmpdir = tempfile.mkdtemp()
-        outtmpl = os.path.join(tmpdir, "%(title)s.%(ext)s")
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': outtmpl,
-            'quiet': True,
-            'noplaylist': True,
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '128',
-            }],
-        }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            # cari mp3
-            for f in os.listdir(tmpdir):
-                if f.endswith(".mp3"):
-                    path = os.path.join(tmpdir, f)
-                    return path, tmpdir, info.get('title','Lagu')
-    except Exception as e:
-        logger.error(f"YT DL ERR: {e}")
-    return None, None, None
-
-# ============== HANDLERS ==============
-async def ota_handler(request):
-    return web.json_response({
-        "firmware": {"version": "2.4.2-amix-v9", "url": ""},
-        "websocket": {"url": "wss://amixkuningancloud-production.up.railway.app/xiaozhi/v1/"}
-    })
-
-async def websocket_handler(request):
-    ws = web.WebSocketResponse()
-    await ws.prepare(request)
+@app.websocket("/xiaozhi/v1/")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
     logger.info("WS CONNECTED")
-
     try:
-        async for msg in ws:
-            if msg.type == web.WSMsgType.TEXT:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+            except:
+                msg = {"text": data}
+
+            # Log
+            if msg.get("type") == "listen":
+                logger.info(f"LISTEN start txt='{msg.get('text','')}'")
+                continue
+            if msg.get("type") == "audio":
+                continue
+
+            user_text = msg.get("text") or msg.get("data") or ""
+            if isinstance(user_text, dict):
+                user_text = user_text.get("text","")
+            user_text = str(user_text).strip()
+            if not user_text or len(user_text) < 2:
+                # kadang text kosong karena masih listening
+                continue
+
+            logger.info(f"USER TEXT: {user_text}")
+
+            # Cek musik?
+            lower = user_text.lower()
+            is_music = any(k in lower for k in ["putar", "play", "lagu", "musik", "komang", "bernadya", "juicy luicy", "tenxi", "dj", "koplo", "dangdut"])
+
+            if is_music and YTDLP_OK and FFMPEG_OK:
+                await websocket.send_text(json.dumps({"type": "tts", "state": "start", "text": f"Siap bos, muter {user_text}!"}))
                 try:
-                    data = json.loads(msg.data)
-                except:
-                    continue
+                    entry = await asyncio.to_thread(search_youtube, user_text)
+                    if entry:
+                        url = entry.get('webpage_url') or entry.get('url')
+                        if url:
+                            tmpdir = tempfile.mkdtemp()
+                            outtmpl = os.path.join(tmpdir, "%(title)s.%(ext)s")
+                            ydl_opts = {
+                                'format': 'bestaudio/best',
+                                'outtmpl': outtmpl,
+                                'quiet': True,
+                                'noplaylist': True,
+                            }
+                            def dl():
+                                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                                    info = ydl.extract_info(url, download=True)
+                                    return info
+                            info = await asyncio.to_thread(dl)
+                            # cari file audio
+                            files = os.listdir(tmpdir)
+                            audio_file = None
+                            for f in files:
+                                if f.endswith((".webm",".m4a",".mp3",".opus",".mp4")):
+                                    audio_file = os.path.join(tmpdir, f)
+                                    break
+                            if audio_file:
+                                opus_path = os.path.join(tmpdir, "out.opus")
+                                subprocess.run(["ffmpeg","-y","-i",audio_file,"-ar","16000","-ac","1","-c:a","libopus","-b:a","32k",opus_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                if os.path.exists(opus_path):
+                                    import base64
+                                    with open(opus_path,"rb") as af:
+                                        b64 = base64.b64encode(af.read()).decode()
+                                    # kirim sesuai protokol xiaozhi: audio binary base64
+                                    await websocket.send_text(json.dumps({"type": "audio", "audio": b64, "format": "opus", "sample_rate": 16000}))
+                                    logger.info(f"YT PLAYED: {user_text}")
+                            shutil.rmtree(tmpdir, ignore_errors=True)
+                            await websocket.send_text(json.dumps({"type": "tts", "state": "stop"}))
+                            continue
+                except Exception as e:
+                    logger.error(f"YT PLAY ERR: {e}")
 
-                # Audio dari ESP32
-                if data.get("type") == "listen" and data.get("state") == "start":
-                    logger.info(f"LISTEN start txt='{data.get('text','')}'")
-                    await ws.send_json({"type": "stt", "text": "mendengarkan..."})
+                await websocket.send_text(json.dumps({"type": "tts", "state": "start", "text": "Lagu tidak ketemu bos, coba judul lain"}))
+                await websocket.send_text(json.dumps({"type": "tts", "state": "stop"}))
+                continue
 
-                if "audio" in data:
-                    # ini audio opus dari device, kita proses STT sederhana -> langsung ke Gemini
-                    # Untuk V9, kita pakai text dari STT yang dikirim device, atau dummy
-                    pass
-
-                # Text langsung (dari device setelah STT)
-                if data.get("type") == "text" or "text" in data:
-                    user_text = data.get("text") or data.get("data") or ""
-                    user_text = str(user_text).strip()
-                    if not user_text:
-                        continue
-
-                    logger.info(f"USER TEXT: {user_text}")
-
-                    # CEK APAKAH MINTA LAGU?
-                    is_music = any(k in user_text.lower() for k in ["putar", "play", "lagu", "musik", "komang", "bernadya", "juicy", "dj"])
-                    
-                    if is_music and YTDLP_OK and FFMPEG_OK:
-                        await ws.send_json({"type": "tts", "state": "start", "text": f"Siap, putar lagu {user_text}, bos!"})
-                        # Search YT
-                        entry = search_youtube(user_text)
-                        if entry:
-                            url = entry.get('url') or entry.get('webpage_url') or f"https://www.youtube.com/watch?v={entry.get('id')}"
-                            mp3_path, tmpdir, title = download_and_convert(url)
-                            if mp3_path:
-                                # convert mp3 ke opus 16k untuk xiaozhi
-                                opus_path = mp3_path.replace(".mp3",".opus")
-                                subprocess.run(["ffmpeg","-y","-i",mp3_path,"-ar","16000","-ac","1","-c:a","libopus",opus_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                                # kirim audio
-                                with open(opus_path,"rb") as f:
-                                    b64 = base64.b64encode(f.read()).decode()
-                                    await ws.send_json({"type": "audio", "audio": b64, "format": "opus", "sample_rate": 16000})
-                                shutil.rmtree(tmpdir, ignore_errors=True)
-                                await ws.send_json({"type": "tts", "state": "stop"})
-                                logger.info(f"YT PLAYED: {title}")
-                                continue
-                        await ws.send_json({"type": "tts", "state": "stop", "text": "Waduh, lagu gak ketemu bos, coba judul lain!"})
-                        continue
-
-                    # JIKA BUKAN LAGU -> GEMINI AI
-                    try:
-                        model = genai.GenerativeModel(MODEL_NAME)
-                        response = await asyncio.to_thread(model.generate_content, f"Kamu adalah Siaga, asisten Amix Kuningan dari Jawa Barat, jawab singkat santai Sunda, user bilang: {user_text}")
-                        ai_text = response.text.strip()
-                        logger.info(f"GEMINI OK: {ai_text[:80]}")
-                        await ws.send_json({"type": "tts", "state": "start"})
-                        await ws.send_json({"type": "tts", "state": "sentence_start", "text": ai_text})
-                        # TTS pakai edge atau dummy audio? Untuk sekarang kirim text aja, device akan TTS sendiri
-                        await ws.send_json({"type": "tts", "state": "stop"})
-                    except Exception as e:
-                        logger.error(f"GEMINI ERR {e}")
-                        await ws.send_json({"type": "tts", "state": "start", "text": "Waduh error bos, coba lagi!"})
-                        await ws.send_json({"type": "tts", "state": "stop"})
-
-            elif msg.type == web.WSMsgType.BINARY:
-                logger.info(f"AUDIO BINARY {len(msg.data)} bytes")
-                # disini seharusnya STT, tapi untuk fix cepat kita anggap device sudah STT sendiri
+            # AI CHAT
+            try:
+                model = genai.GenerativeModel(MODEL_NAME)
+                prompt = f"Kamu adalah Siaga, asisten AI dari Amix Kuningan, Jawa Barat. Jawab singkat, santai, bahasa Indonesia campur Sunda, maksimal 2 kalimat. User bilang: {user_text}"
+                resp = await asyncio.to_thread(model.generate_content, prompt)
+                ai_text = resp.text.strip()
+                logger.info(f"GEMINI OK: {ai_text[:100]}")
+                await websocket.send_text(json.dumps({"type": "tts", "state": "start"}))
+                await websocket.send_text(json.dumps({"type": "tts", "state": "sentence_start", "text": ai_text}))
+                await websocket.send_text(json.dumps({"type": "tts", "state": "stop"}))
+            except Exception as e:
+                logger.error(f"GEMINI ERR {e}")
+                # Kirim fallback biar gak looping mendengarkan terus
+                await websocket.send_text(json.dumps({"type": "tts", "state": "start", "text": "Halo bos, Siaga sudah online! Silakan ngobrol!"}))
+                await websocket.send_text(json.dumps({"type": "tts", "state": "stop"}))
 
     except Exception as e:
         logger.error(f"WS ERR {e}")
     finally:
         logger.info("WS DISCONNECTED")
-    return ws
 
-app = web.Application()
-app.router.add_get("/xiaozhi/ota/", ota_handler)
-app.router.add_post("/xiaozhi/ota/", ota_handler)
-app.router.add_get("/xiaozhi/v1/", websocket_handler)
-app.router.add_get("/", lambda r: web.Response(text="Amix Kuningan Cloud V9 YOUTUBE DJ READY"))
-
+# Untuk uvicorn
 if __name__ == "__main__":
-    web.run_app(app, host="0.0.0.0", port=int(os.getenv("PORT","8080")))
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT","8080")))
